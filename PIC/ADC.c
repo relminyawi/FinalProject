@@ -9,20 +9,15 @@ sampling and returns conversion result.
 	the ADCS bits in the equation below (peripheral clock divider = 2)
 				tAD = 2*tPB(ADCS+1)
 				(our tPB = 1/40 MHz = 25 ns)	
-- We want our sampling rate to be 9000 Hz. Sampling rate and ADC clock period are related
+- We want our sampling rate to be 1Msps. Sampling rate and ADC clock period are related
 	by 
 				sampRate = 1/(sampTime + 12*tAD)
 	where sampTime is the amount of time necessary for the input to settle before conversion 
 	takes place. 
-				sampTime = 1/(2*(12+
 
-				sampRate = 1/(sampTime + 12*tAD)
-				9000 Hz  = 1/(110*10^-4 sec + 12*tAD)
-					tAD  = 10 us
-				
 				tAD 	= 2*tPB(ADCS+1)
-				10us 	= 2*25ns(ADCS+1)
-				ADCS 	= 199 = b11000111
+				50us 	= 2*25ns(ADCS+1)
+				ADCS 	= 0
 				ADCS 	= ADC Conversion Clock Select bits
 				
 */
@@ -40,7 +35,6 @@ void initadc(int channel){
 	AD1CON1bits.ON = 1;				//turn ADC on
 	AD1CON1bits.SAMP = 1;			//begin sampling
 	AD1CON1bits.DONE = 0;			//clear DONE flag, enable conversion
-	AD1CON3.bits.ADCS = 11000111; 	//configure our ADCS bits 
 	}
 
 int readadc(void){	
