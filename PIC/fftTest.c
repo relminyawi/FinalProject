@@ -4,6 +4,7 @@
 #define N_WAVE (1 << LOG2_N_WAVE)      // 2048 dots
 #define N_WAVE34 (N_WAVE - N_WAVE / 4) // Sinus lookup table size (3/4 wave)
 
+#define GAIN 32                        // Preamplifier
 #define OVERSAMPLING 2                 // 0 for 1x
                                        // 1 for 2x
                                        // 2 for 4x
