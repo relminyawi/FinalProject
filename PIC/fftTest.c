@@ -1,7 +1,7 @@
 //modified from http://chipkit.net/forum/viewtopic.php?f=15&t=512&p=2633
 
-#define LOG2_N_WAVE 11                 // 11 bits
-#define N_WAVE (1 << LOG2_N_WAVE)      // 2048 dots
+#define LOG2_N_WAVE 12                 // 12 bits
+#define N_WAVE (1 << LOG2_N_WAVE)      // 4096 points
 #define N_WAVE34 (N_WAVE - N_WAVE / 4) // Sinus lookup table size (3/4 wave)
 
 #define GAIN 32                        // Preamplifier
