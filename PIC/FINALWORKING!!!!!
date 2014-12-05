@@ -1,0 +1,172 @@
+/** INCLUDES ***************************************************/
+#include <plib.h>
+#include "dsplib_dsp.h"
+#include "fftc.h"
+
+
+/** Constants **************************************************/
+
+// To modify the number of samples:
+#define fftc fft16c256 //from fftc.h, for N = 256 use fft16c256, for N = 1024 use fft16c1024	
+#define N 256	// Also change the log2N variable below!!
+#define SYSCLK (40000000L) 	//give the system's clock frequency
+
+/** Function Declarations **************************************/
+//void initInterruptController();
+
+//void computeFFT(void);  //sets up function to compute FFT
+
+int main(void);
+
+/** Global Variables *******************************************/
+
+int sampleIndex = 0; //keeps track of where we're putting our ADC reading
+//int x =0;
+
+int log2N = 8; // log2(256) = 8
+
+
+int16c calcBuffer[N]; // initialize buffer to hold old samples
+int16c scratch[N];
+int16c dout[N]; //holds computed FFT until transmission
+
+long int singleSidedFFT[N];
+long int sampleBuffer[N]; //initialize buffer to collect samples
+
+
+
+/** Interrupt Handlers *****************************************/
+// interrput code for the timer 3
+void __ISR( _TIMER_3_VECTOR, ipl7) T3Interrupt( void)
+{
+	int i;
+	
+	if (sampleIndex == (N))
+	{
+		sampleIndex = 0;
+	}
+	PORTFbits.RF0 = 1; // Output low
+	sampleBuffer[sampleIndex] = ReadADC10(0); // read the ADC into the real part of the samplebuffer
+	sampleIndex++;
+	//x=2;
+
+	// increment the sampleIndex
+
+
+	// clear interrupt flag and exit
+	mT3ClearIntFlag();
+} // T3 Interrupt
+
+
+/** Other Functions ********************************************/
+
+void initInterruptController(void)
+{
+	// init Timer3 mode and period (PR3) 
+	OpenTimer3( T3_ON | T3_PS_1_1 | T3_SOURCE_INT, 0x0FA0); // produces 100 ms period
+															// sampling frequency = 10 kHz
+															// 0x0fa0 = 5khz, 01f40 = 10khz
+	
+	mT3SetIntPriority(7); 	// set Timer3 Interrupt Priority
+	mT3ClearIntFlag(); 		// clear interrupt flag
+	mT3IntEnable(1);		// enable timer3 interrupts
+}
+
+void computeFFT()
+{
+	int i;
+	
+	mT3IntEnable(0); //turns off interrupt while computing FFT
+	
+	for (i=0; i<N; i++)
+	{
+		calcBuffer[i].im = 0;
+		if (i<sampleIndex)
+		{
+			// old chunk
+			calcBuffer[i+(N-sampleIndex)].re = sampleBuffer[i];
+		}	
+		else // i >= sampleIndex
+		{
+			// new chunk
+			calcBuffer[i-sampleIndex].re = sampleBuffer[i];
+		}	
+		
+	}	
+	
+	// load complex input data into din
+	mips_fft16(dout, calcBuffer, fftc, scratch, log2N);
+	
+	// compute single sided fft
+	for(i = 0; i < N/2; i++)
+	{
+		singleSidedFFT[i] = 2 * ((dout[i].re*dout[i].re));
+	}
+	mT3IntEnable(1); //turn interrupt back on
+}
+
+/** Main Function **********************************************/
+int main(void)
+{
+
+	int i;
+
+	TRISF = 0; // Use PORTF for output
+	
+	// Allow vector interrupts
+	INTEnableSystemMultiVectoredInt();
+
+	initInterruptController();
+
+	SYSTEMConfigPerformance(SYSCLK);
+
+	// -------- Set Up ADC --------
+	// configure and enable the ADC
+	CloseADC10();	// ensure the ADC is off before setting the configuration
+
+	// define setup parameters for OpenADC10
+				// Turn module on | output in integer | trigger mode auto | enable  autosample
+	#define PARAM1  ADC_MODULE_ON | ADC_FORMAT_INTG16 | ADC_CLK_AUTO | ADC_AUTO_SAMPLING_ON
+
+	// define setup parameters for OpenADC10
+				// ADC ref external    | disable offset test    | enable scan mode | perform 1 samples | use one buffer | use MUXA mode
+	#define PARAM2  ADC_VREF_AVDD_AVSS | ADC_OFFSET_CAL_DISABLE | ADC_SCAN_ON | ADC_SAMPLES_PER_INT_1 | ADC_ALT_BUF_OFF | ADC_ALT_INPUT_OFF
+
+	// define setup parameters for OpenADC10
+	// 				  use ADC internal clock | set sample time
+	#define PARAM3  ADC_CONV_CLK_INTERNAL_RC | ADC_SAMPLE_TIME_15
+
+	// define setup parameters for OpenADC10
+				// set AN4
+	#define PARAM4	ENABLE_AN4_ANA
+
+	// define setup parameters for OpenADC10
+	// do not assign channels to scan
+	#define PARAM5	SKIP_SCAN_AN0 | SKIP_SCAN_AN1 | SKIP_SCAN_AN2 | SKIP_SCAN_AN3 | SKIP_SCAN_AN5 | SKIP_SCAN_AN6 | SKIP_SCAN_AN7 | SKIP_SCAN_AN8 | SKIP_SCAN_AN9 | SKIP_SCAN_AN10 | SKIP_SCAN_AN11 | SKIP_SCAN_AN12 | SKIP_SCAN_AN13 | SKIP_SCAN_AN14 | SKIP_SCAN_AN15
+
+	// use ground as neg ref for A | use AN4 (B4) for input A
+	// configure to sample AN4
+	SetChanADC10( ADC_CH0_NEG_SAMPLEA_NVREF); // configure to sample AN4
+	OpenADC10( PARAM1, PARAM2, PARAM3, PARAM4, PARAM5 ); // configure ADC using parameter define above
+
+	EnableADC10(); // Enable the ADC
+
+	while ( ! mAD1GetIntFlag() ) { } // wait for the first conversion to complete so there will be valid data in ADC result registers
+	// ------ DONE SETTING UP ADC ------
+	
+	// zero the freqVector and singleSidedFFT
+	for (i=0; i<N; i++)
+	{
+		singleSidedFFT[i] = 0;
+	}
+
+	while(1)
+	{
+		PORTFbits.RF0 = 0; // Output high
+		if(sampleIndex == (N-1)){
+		computeFFT();
+		//x=1;	
+		}
+	}
+	//CloseOC1();
+} //end main
