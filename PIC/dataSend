@@ -1,0 +1,414 @@
+/** INCLUDES ***************************************************/
+#include <plib.h>
+#include "dsplib_dsp.h"
+#include "fftc.h"
+#include <p32xxxx.h>
+
+/** Constants **************************************************/
+
+// To modify the number of samples:
+#define fftc fft16c256 //from fftc.h, for N = 256 use fft16c256, for N = 1024 use fft16c1024	
+#define N 256	// Also change the log2N variable below!!
+#define SYSCLK (40000000L) 	//give the system's clock frequency
+
+/** Function Declarations **************************************/
+int main(void);
+
+/** Global Variables *******************************************/
+
+int sampleIndex = 0; //keeps track of where we're putting our ADC reading
+
+int log2N = 8; // log2(256) = 8
+
+
+int16c calcBuffer[N]; // initialize buffer to hold old samples
+int16c scratch[N];
+int16c dout[N]; //holds computed FFT until transmission
+
+long int singleSidedFFT[N];
+long int sampleBuffer[N]; //initialize buffer to collect samples
+long int freqData[(N/2)-1]; //throws out DC offset cause its high
+ 
+
+
+//splits the single sided spectrum into 32 columns with equal frequency range in each column
+long int col0Data[4];
+long int col1Data[4], col2Data[4], col3Data[4], col4Data[4], col5Data[4], col6Data[4], col7Data[4], col8Data[4], col9Data[4];
+long int col10Data[4], col11Data[4], col12Data[4], col13Data[4], col14Data[4], col15Data[4], col16Data[4], col17Data[4], col18Data[4], col19Data[4];
+long int col20Data[4], col21Data[4], col22Data[4], col23Data[4], col24Data[4], col25Data[4], col26Data[4], col27Data[4], col28Data[4], col29Data[4];
+long int col30Data[4], col31Data[4];
+
+//holds frequency maximum for each column that needs to be sent to FPGA over spi
+short int col0, col1, col2, col3, col4, col5, col6, col7, col8, col9;            
+short int col10, col11, col12, col13, col14, col15, col16, col17, col18, col19;
+short int col20, col21, col22, col23, col24, col25, col26, col27, col28, col29;
+short int col30, col31;
+
+long int data0, data1, data2, data3, data4, data5, data6, data7, data8, data9, data10, data11, data12, data13, data14, data15;
+
+
+/** Interrupt Handlers *****************************************/
+// interrput code for the timer 3
+void __ISR( _TIMER_3_VECTOR, ipl7) T3Interrupt( void)
+{
+	int i;
+	
+	if (sampleIndex == (N))
+	{
+		sampleIndex = 0;
+	}
+	//PORTFbits.RF0 = 1; // Output high (debugging)
+	sampleBuffer[sampleIndex] = ReadADC10(0); // read the ADC into the real part of the samplebuffer
+	sampleIndex++;
+
+	// increment the sampleIndex
+
+
+	// clear interrupt flag and exit
+	mT3ClearIntFlag();
+} // T3 Interrupt
+
+
+/** Other Functions ********************************************/
+
+void initInterruptController(void)
+{
+	// init Timer3 mode and period (PR3) 
+	OpenTimer3( T3_ON | T3_PS_1_1 | T3_SOURCE_INT, 0x0FA0); // produces 100 ms period
+															// sampling frequency = 10 kHz
+															// 0x0fa0 = 5khz, 01f40 = 10khz
+	
+	mT3SetIntPriority(7); 	// set Timer3 Interrupt Priority
+	mT3ClearIntFlag(); 		// clear interrupt flag
+	mT3IntEnable(1);		// enable timer3 interrupts
+}
+
+void computeFFT()
+{
+	int i;
+	
+	mT3IntEnable(0); //turns off interrupt while computing FFT
+	
+	for (i=0; i<N; i++)
+	{
+		calcBuffer[i].im = 0;
+		if (i<sampleIndex)
+		{
+			// old chunk
+			calcBuffer[i+(N-sampleIndex)].re = sampleBuffer[i];
+		}	
+		else // i >= sampleIndex
+		{
+			// new chunk
+			calcBuffer[i-sampleIndex].re = sampleBuffer[i];
+		}	
+		
+	}	
+	
+	// load complex input data into din
+	mips_fft16(dout, calcBuffer, fftc, scratch, log2N);
+	
+	// compute single sided fft
+	for(i = 0; i < N/2; i++)
+	{
+		singleSidedFFT[i] = 2 * ((dout[i].re*dout[i].re));
+	}
+	mT3IntEnable(1); //turn interrupt back on
+}
+
+int maxArray(long int numArray[4]){
+	
+	int i;
+	long int maxNum;
+	maxNum = numArray[0];
+	for(i=0; i<4; i++){
+		if(numArray[i] >= maxNum){
+			maxNum = numArray[i];
+		}
+}
+	return maxNum;
+}			
+	
+	
+
+void sendData(){
+  
+	int i,j;
+
+	/*
+	This nested for loop and if structure will copy the FFT array data into 32 separate arrays
+	of length 4. Each of the 4 length arrays will correspond to a column on the LED matrix. 
+	
+	The DC offset is neglected, because the value is very high *potentially change*
+	*/
+	for(i = 0; i<N/2; i++){
+		for(j=0; j<4; j++){
+			if(i == 0){
+				col0Data[j] = singleSidedFFT[j];
+				col0Data[0] = 0;
+			}
+			else if(i == 1){
+				col1Data[j] = singleSidedFFT[j+4*i];
+			}
+			else if(i == 2){
+				col2Data[j] = singleSidedFFT[j+4*i];
+			}
+			else if(i == 3){
+				col3Data[j] = singleSidedFFT[j+4*i];
+			}
+			else if(i == 4){
+				col4Data[j] = singleSidedFFT[j+4*i];
+			}
+			else if(i == 5){
+				col5Data[j] = singleSidedFFT[j+4*i];
+			}
+			else if(i == 6){
+				col6Data[j] = singleSidedFFT[j+4*i];
+			}
+			else if(i == 7){
+				col7Data[j] = singleSidedFFT[j+4*i];
+			}
+			else if(i == 8){
+				col8Data[j] = singleSidedFFT[j+4*i];
+			}
+			else if(i == 9){
+				col9Data[j] = singleSidedFFT[j+4*i];
+			}
+			else if(i == 10){
+				col10Data[j] = singleSidedFFT[j+4*i];
+			}
+			else if(i == 11){
+				col11Data[j] = singleSidedFFT[j+4*i];
+			}
+			else if(i == 12){
+				col12Data[j] = singleSidedFFT[j+4*i];
+			}
+			else if(i == 13){
+				col13Data[j] = singleSidedFFT[j+4*i];
+			}
+			else if(i == 14){
+				col14Data[j] = singleSidedFFT[j+4*i];
+			}
+			else if(i == 15){
+				col15Data[j] = singleSidedFFT[j+4*i];
+			}
+			else if(i == 16){
+				col16Data[j] = singleSidedFFT[j+4*i];
+			}
+			else if(i == 17){
+				col17Data[j] = singleSidedFFT[j+4*i];
+			}
+			else if(i == 18){
+				col18Data[j] = singleSidedFFT[j+4*i];
+			}
+			else if(i == 19){
+				col19Data[j] = singleSidedFFT[j+4*i];
+			}
+			else if(i == 20){
+				col20Data[j] = singleSidedFFT[j+4*i];
+			}
+			else if(i == 21){
+				col21Data[j] = singleSidedFFT[j+4*i];
+			}
+			else if(i == 22){
+				col22Data[j] = singleSidedFFT[j+4*i];
+			}
+			else if(i == 23){
+				col23Data[j] = singleSidedFFT[j+4*i];
+			}
+			else if(i == 24){
+				col24Data[j] = singleSidedFFT[j+4*i];
+			}
+			else if(i == 25){
+				col25Data[j] = singleSidedFFT[j+4*i];
+			}
+			else if(i == 26){
+				col26Data[j] = singleSidedFFT[j+4*i];
+			}
+			else if(i == 27){
+				col27Data[j] = singleSidedFFT[j+4*i];
+			}
+			else if(i == 28){
+				col28Data[j] = singleSidedFFT[j+4*i];
+			}
+			else if(i == 29){
+				col29Data[j] = singleSidedFFT[j+4*i];
+			}
+			else if(i == 30){
+				col30Data[j] = singleSidedFFT[j+4*i];
+			}
+			else if (i == 31){
+				col31Data[j] = singleSidedFFT[j+4*i];
+			}
+		}
+	}
+		//finds maximum of each frequency bucket and sends each int over spi to FPGA
+
+		col0 = maxArray(col0Data);
+		col1 = maxArray(col1Data);
+		col2 = maxArray(col2Data);
+		col3 = maxArray(col3Data);
+		col4 = maxArray(col4Data);
+		col5 = maxArray(col5Data);
+		col6 = maxArray(col6Data);
+		col7 = maxArray(col7Data);
+		col8 = maxArray(col8Data);
+		col9 = maxArray(col9Data);
+		col10 = maxArray(col10Data);
+		col11 = maxArray(col11Data);
+		col12 = maxArray(col12Data);
+		col13 = maxArray(col13Data);
+		col14 = maxArray(col14Data);
+		col15 = maxArray(col15Data);
+		col16 = maxArray(col16Data);
+		col17 = maxArray(col17Data);
+		col18 = maxArray(col18Data);
+		col19 = maxArray(col19Data);
+		col20 = maxArray(col20Data);
+		col21 = maxArray(col21Data);
+		col22 = maxArray(col22Data);
+		col23 = maxArray(col23Data);
+		col24 = maxArray(col24Data);
+		col25 = maxArray(col25Data);
+		col26 = maxArray(col26Data);
+		col27 = maxArray(col27Data);
+		col28 = maxArray(col28Data);
+		col29 = maxArray(col29Data);
+		col30 = maxArray(col30Data);
+		col31 = maxArray(col31Data);
+
+		//begin sending max frequency data over spi
+		//by appending two max frequencies together
+	
+	
+		data0 = ((long) col0 <<16)| (long) col1;
+		spi_send_receive( data0 );
+		data1 = ((long) col2 <<16)| (long) col3;
+		spi_send_receive( data1 );
+		data2 = ((long) col4 <<16)| (long) col5;
+		spi_send_receive( data2 );
+		data3 = ((long) col6 <<16)| (long) col7;
+		spi_send_receive( data3 );
+		data4 = ((long) col8 <<16)| (long) col9;
+		spi_send_receive( data4 );
+		data5 = ((long) col10 <<16)| (long) col11;
+		spi_send_receive( data5 );
+		data6 = ((long) col12 <<16)| (long) col13;
+		spi_send_receive( data6 );
+		data7 = ((long) col14 <<16)| (long) col15;
+		spi_send_receive( data7 );
+		data8 = ((long) col16 <<16)| (long) col17;
+		spi_send_receive( data8 );
+		data9 = ((long) col18 <<16)| (long) col19;
+		spi_send_receive( data9 );
+		data10 = ((long) col20 <<16)| (long) col21;
+		spi_send_receive( data10 );
+		data11 = ((long) col22 <<16)| (long) col23;
+		spi_send_receive( data11 );
+		data12 = ((long) col24 <<16)| (long) col25;
+		spi_send_receive( data12 );
+		data13 = ((long) col26 <<16)| (long) col27;
+		spi_send_receive( data13 );
+		data14 = ((long) col28 <<16)| (long) col29;
+		spi_send_receive( data14 );
+		data15 = ((long) col30 <<16)| (long) col31;
+		spi_send_receive( data15 );
+		
+	
+	}
+
+//******************************************************************************
+//******************************************************************************
+// Initspi 
+//******************************************************************************
+//******************************************************************************
+
+void initspi(void) {
+	char junk;
+
+	SPI2CONbits.ON = 0; // disable SPI to reset any previous state
+	junk = SPI2BUF; // read SPI buffer to clear the receive buffer
+	SPI2BRG = 15; //set BAUD rate to 1.25MHz, with Pclk at 40MHz 
+	SPI2CONbits.MSTEN = 1; // enable master mode
+	SPI2CONbits.CKE = 1; // set clock-to-data timing (data centered on rising SCK edge)
+	SPI2CONbits.MODE32 = 1; //set SPI to 32 bit transmit mode 
+	SPI2CONbits.ON = 1; // turn SPI on
+}
+
+//******************************************************************************
+//******************************************************************************
+// Spi send
+//******************************************************************************
+//******************************************************************************
+
+void spi_send_receive(long send) {
+	SPI2BUF = send; // send data to slave
+}	
+
+/** Main Function **********************************************/
+int main(void)
+{
+
+	int i;
+
+	TRISF = 0; // Use PORTF for output
+	
+	// Allow vector interrupts
+	INTEnableSystemMultiVectoredInt();
+
+	initInterruptController();
+	initspi(); 				// initialize the SPI port
+
+	SYSTEMConfigPerformance(SYSCLK);
+
+	// -------- Set Up ADC --------
+	// configure and enable the ADC
+	CloseADC10();	// ensure the ADC is off before setting the configuration
+
+	// define setup parameters for OpenADC10
+				// Turn module on | output in integer | trigger mode auto | enable  autosample
+	#define PARAM1  ADC_MODULE_ON | ADC_FORMAT_INTG16 | ADC_CLK_AUTO | ADC_AUTO_SAMPLING_ON
+
+	// define setup parameters for OpenADC10
+				// ADC ref external    | disable offset test    | enable scan mode | perform 1 samples | use one buffer | use MUXA mode
+	#define PARAM2  ADC_VREF_AVDD_AVSS | ADC_OFFSET_CAL_DISABLE | ADC_SCAN_ON | ADC_SAMPLES_PER_INT_1 | ADC_ALT_BUF_OFF | ADC_ALT_INPUT_OFF
+
+	// define setup parameters for OpenADC10
+	// 				  use ADC internal clock | set sample time
+	#define PARAM3  ADC_CONV_CLK_INTERNAL_RC | ADC_SAMPLE_TIME_15
+
+	// define setup parameters for OpenADC10
+				// set AN4
+	#define PARAM4	ENABLE_AN4_ANA
+
+	// define setup parameters for OpenADC10
+	// do not assign channels to scan
+	#define PARAM5	SKIP_SCAN_AN0 | SKIP_SCAN_AN1 | SKIP_SCAN_AN2 | SKIP_SCAN_AN3 | SKIP_SCAN_AN5 | SKIP_SCAN_AN6 | SKIP_SCAN_AN7 | SKIP_SCAN_AN8 | SKIP_SCAN_AN9 | SKIP_SCAN_AN10 | SKIP_SCAN_AN11 | SKIP_SCAN_AN12 | SKIP_SCAN_AN13 | SKIP_SCAN_AN14 | SKIP_SCAN_AN15
+
+	// use ground as neg ref for A | use AN4 (B4) for input A
+	// configure to sample AN4
+	SetChanADC10( ADC_CH0_NEG_SAMPLEA_NVREF); // configure to sample AN4
+	OpenADC10( PARAM1, PARAM2, PARAM3, PARAM4, PARAM5 ); // configure ADC using parameter define above
+
+	EnableADC10(); // Enable the ADC
+
+	while ( ! mAD1GetIntFlag() ) { } // wait for the first conversion to complete so there will be valid data in ADC result registers
+	// ------ DONE SETTING UP ADC ------
+	
+	// zero the freqVector and singleSidedFFT
+	for (i=0; i<N; i++)
+	{
+		singleSidedFFT[i] = 0;
+	}
+
+	while(1)
+	{
+		//PORTFbits.RF0 = 0; // Output low (debugging)
+		if(sampleIndex == (N-1)){
+		computeFFT();
+		sendData();
+		}
+	}
+	//CloseOC1();
+} //end main
+
